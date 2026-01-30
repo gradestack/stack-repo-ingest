@@ -180,6 +180,67 @@ See [PR_INTELLIGENCE.md](PR_INTELLIGENCE.md) for detailed examples and use cases
 
 See [SHADOW_INFRASTRUCTURE.md](SHADOW_INFRASTRUCTURE.md) for detailed examples and use cases.
 
+### 9. Commit Archaeology
+**NEW:** Analyzes git commit patterns to understand team behavior:
+- **Deployment timing**: When do they ship? (Friday avoidance = deploy fear)
+- **Revert frequency**: How often do they break prod?
+- **Weekend activity**: Work-life balance or incident response?
+- **Commit message quality**: Documentation culture indicator
+
+**Real insight from gradestack/stacops**:
+```json
+{
+  "issue": "friday_deploy_avoidance",
+  "description": "0 Friday commits in 9 total commits",
+  "suggestion": "Build confidence with better testing and rollback"
+}
+```
+
+### 10. Code Fear Indicators
+**NEW:** Detects areas developers are afraid to touch:
+- "DO NOT TOUCH" comments → sacred cow code
+- "FRAGILE" warnings → known brittle areas
+- Frozen files → code untouched for years
+
+### 11. Hidden Dependencies
+**NEW:** Discovers dependencies not in package managers:
+- **System packages**: apt-get, yum, apk in Dockerfiles
+- **Runtime fetches**: curl/wget in shell scripts
+- **External APIs**: Service dependencies
+
+**Real insight from gradestack/tfjson**:
+```json
+{
+  "issue": "runtime_fetches_detected",
+  "description": "install.sh uses curl/wget",
+  "suggestion": "Runtime fetches can fail and are hard to version"
+}
+```
+
+### 12. CI/CD Performance Analysis
+**NEW:** Identifies CI bottlenecks and reliability issues:
+- **Workflow timing**: Average duration per workflow
+- **Failure rates**: Flaky test detection
+- **Slow workflows**: >15 minute builds
+
+**Real insight from gradestack**:
+```json
+{
+  "issue": "flaky_ci_workflow",
+  "severity": "high",
+  "description": "Scoring CI: 43% failure rate, Integration Tests: 75%",
+  "suggestion": "High failure rate suggests flaky tests"
+}
+```
+
+## Complete Intelligence System
+
+This tool now extracts **12 layers of intelligence** from GitHub repos. See [INTELLIGENCE_SUMMARY.md](INTELLIGENCE_SUMMARY.md) for:
+- Complete feature breakdown
+- Real results from gradestack org
+- How each layer enables context-aware AI
+- Performance and rate limit details
+
 ## Installation
 
 ```bash

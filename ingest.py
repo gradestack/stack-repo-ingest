@@ -101,6 +101,10 @@ class RepoIngester:
             'structure': self._analyze_structure(repo),
             'pr_intelligence': self._mine_pr_comments(repo),
             'shadow_infrastructure': self._discover_shadow_infrastructure(repo),
+            'commit_archaeology': self._analyze_commit_patterns(repo),
+            'code_fear_indicators': self._detect_code_fear(repo),
+            'hidden_dependencies': self._discover_hidden_dependencies(repo),
+            'ci_analysis': self._analyze_ci_performance(repo),
             'ingested_at': datetime.now(timezone.utc).isoformat()
         }
 
@@ -768,6 +772,340 @@ class RepoIngester:
             })
 
         return insights
+
+    def _analyze_commit_patterns(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Analyze git commit patterns to understand team behavior"""
+        print("  Analyzing commit patterns...")
+
+        patterns = {
+            'total_commits': 0,
+            'commit_times': {'weekday': {}, 'hour': {}},
+            'revert_commits': [],
+            'friday_deploys': 0,
+            'weekend_activity': 0,
+            'avg_commit_message_length': 0,
+            'insights': []
+        }
+
+        try:
+            # Get recent commits (limit to 200 to avoid rate limits)
+            commits = list(repo.get_commits()[:200])
+            patterns['total_commits'] = len(commits)
+
+            if len(commits) == 0:
+                return patterns
+
+            commit_message_lengths = []
+
+            for commit in commits:
+                # Time patterns
+                commit_time = commit.commit.author.date
+                weekday = commit_time.strftime('%A')
+                hour = commit_time.hour
+
+                patterns['commit_times']['weekday'][weekday] = \
+                    patterns['commit_times']['weekday'].get(weekday, 0) + 1
+                patterns['commit_times']['hour'][str(hour)] = \
+                    patterns['commit_times']['hour'].get(str(hour), 0) + 1
+
+                # Friday deploys
+                if weekday == 'Friday':
+                    patterns['friday_deploys'] += 1
+
+                # Weekend activity
+                if weekday in ['Saturday', 'Sunday']:
+                    patterns['weekend_activity'] += 1
+
+                # Revert detection
+                message = commit.commit.message.lower()
+                if any(keyword in message for keyword in ['revert', 'rollback', 'roll back']):
+                    patterns['revert_commits'].append({
+                        'sha': commit.sha[:7],
+                        'message': commit.commit.message.split('\n')[0][:100],
+                        'date': commit_time.isoformat()
+                    })
+
+                commit_message_lengths.append(len(commit.commit.message))
+
+            # Calculate averages
+            if commit_message_lengths:
+                patterns['avg_commit_message_length'] = \
+                    sum(commit_message_lengths) / len(commit_message_lengths)
+
+            # Generate insights
+            revert_rate = len(patterns['revert_commits']) / len(commits) if commits else 0
+            friday_ratio = patterns['friday_deploys'] / len(commits) if commits else 0
+            weekend_ratio = patterns['weekend_activity'] / len(commits) if commits else 0
+
+            if revert_rate > 0.03:  # More than 3% reverts
+                patterns['insights'].append({
+                    'category': 'stability',
+                    'issue': 'high_revert_rate',
+                    'severity': 'high',
+                    'description': f'{len(patterns["revert_commits"])} reverts in {len(commits)} commits ({revert_rate*100:.1f}%)',
+                    'suggestion': 'High revert rate suggests deployment or testing issues'
+                })
+
+            if friday_ratio < 0.05:  # Less than 5% Friday commits
+                patterns['insights'].append({
+                    'category': 'culture',
+                    'issue': 'friday_deploy_avoidance',
+                    'severity': 'medium',
+                    'description': 'Very few Friday commits, suggesting deploy fear',
+                    'suggestion': 'Build confidence with better testing and rollback procedures'
+                })
+
+            if weekend_ratio > 0.15:  # More than 15% weekend work
+                patterns['insights'].append({
+                    'category': 'culture',
+                    'issue': 'weekend_work',
+                    'severity': 'medium',
+                    'description': f'{weekend_ratio*100:.1f}% of commits on weekends',
+                    'suggestion': 'High weekend activity may indicate incident response or work-life balance issues'
+                })
+
+            if patterns['avg_commit_message_length'] < 20:
+                patterns['insights'].append({
+                    'category': 'process',
+                    'issue': 'poor_commit_messages',
+                    'severity': 'low',
+                    'description': f'Average commit message length: {patterns["avg_commit_message_length"]:.0f} chars',
+                    'suggestion': 'Short commit messages make code archaeology difficult'
+                })
+
+            print(f"    Analyzed {len(commits)} commits, found {len(patterns['insights'])} insights")
+
+        except GithubException as e:
+            print(f"    Error analyzing commits: {e}")
+
+        return patterns
+
+    def _detect_code_fear(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Detect code fear indicators - areas developers are afraid to touch"""
+        print("  Detecting code fear indicators...")
+
+        fear = {
+            'sacred_cows': [],
+            'frozen_files': [],
+            'defensive_code_files': [],
+            'total_fear_signals': 0,
+            'insights': []
+        }
+
+        try:
+            # Search for fear patterns in code
+            fear_keywords = [
+                'DO NOT TOUCH',
+                'DO NOT CHANGE',
+                "DON'T TOUCH",
+                "DON'T CHANGE",
+                'FRAGILE',
+                'DANGEROUS',
+                'CAREFUL',
+                'XXX',
+                'HACK HACK',
+                'WARNING WARNING'
+            ]
+
+            for keyword in fear_keywords:
+                try:
+                    # GitHub code search
+                    query = f'{keyword} repo:{repo.full_name}'
+                    results = self.github.search_code(query)
+
+                    for result in list(results)[:10]:  # Limit to 10 results per keyword
+                        fear['sacred_cows'].append({
+                            'file': result.path,
+                            'keyword': keyword,
+                            'url': result.html_url
+                        })
+                except GithubException:
+                    # Search API might be rate limited or unavailable
+                    continue
+
+            fear['total_fear_signals'] = len(fear['sacred_cows'])
+
+            # Generate insights
+            if fear['total_fear_signals'] > 5:
+                fear['insights'].append({
+                    'category': 'code_quality',
+                    'issue': 'high_fear_signals',
+                    'severity': 'high',
+                    'description': f'{fear["total_fear_signals"]} fear keywords found in code',
+                    'suggestion': 'Multiple "DO NOT TOUCH" warnings suggest technical debt and low confidence'
+                })
+
+            print(f"    Found {fear['total_fear_signals']} fear signals")
+
+        except Exception as e:
+            print(f"    Error detecting code fear: {e}")
+
+        return fear
+
+    def _discover_hidden_dependencies(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Discover hidden dependencies not in package managers"""
+        print("  Discovering hidden dependencies...")
+
+        hidden = {
+            'system_dependencies': [],
+            'runtime_fetches': [],
+            'external_apis': [],
+            'total_hidden_deps': 0,
+            'insights': []
+        }
+
+        try:
+            # Parse Dockerfile for system dependencies
+            try:
+                dockerfile = repo.get_contents("Dockerfile")
+                content = dockerfile.decoded_content.decode('utf-8')
+
+                for line in content.split('\n'):
+                    line = line.strip()
+                    if 'apt-get install' in line or 'apk add' in line or 'yum install' in line:
+                        # Extract package names
+                        packages = line.split('install')[1] if 'install' in line else ''
+                        packages = packages.replace('\\', '').replace('-y', '').replace('--no-cache', '').strip()
+                        if packages and not packages.startswith('#'):
+                            hidden['system_dependencies'].append({
+                                'source': 'Dockerfile',
+                                'packages': packages[:200]  # Limit length
+                            })
+
+            except GithubException:
+                pass
+
+            # Check for curl/wget in shell scripts (runtime fetches)
+            try:
+                contents = repo.get_contents("")
+                for item in contents:
+                    if item.type == "file" and item.name.endswith('.sh'):
+                        try:
+                            script_content = item.decoded_content.decode('utf-8')
+                            if 'curl ' in script_content or 'wget ' in script_content:
+                                hidden['runtime_fetches'].append({
+                                    'file': item.path,
+                                    'type': 'shell_script'
+                                })
+                        except:
+                            continue
+            except GithubException:
+                pass
+
+            hidden['total_hidden_deps'] = \
+                len(hidden['system_dependencies']) + \
+                len(hidden['runtime_fetches'])
+
+            # Generate insights
+            if hidden['system_dependencies']:
+                hidden['insights'].append({
+                    'category': 'dependencies',
+                    'issue': 'system_dependencies_required',
+                    'severity': 'medium',
+                    'description': f'{len(hidden["system_dependencies"])} system dependency declarations found',
+                    'suggestion': 'System dependencies increase deployment complexity'
+                })
+
+            if hidden['runtime_fetches']:
+                hidden['insights'].append({
+                    'category': 'dependencies',
+                    'issue': 'runtime_fetches_detected',
+                    'severity': 'medium',
+                    'description': f'{len(hidden["runtime_fetches"])} scripts with runtime fetches (curl/wget)',
+                    'suggestion': 'Runtime fetches can fail and are hard to version'
+                })
+
+            print(f"    Found {hidden['total_hidden_deps']} hidden dependencies")
+
+        except Exception as e:
+            print(f"    Error discovering hidden dependencies: {e}")
+
+        return hidden
+
+    def _analyze_ci_performance(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Analyze CI/CD performance and identify bottlenecks"""
+        print("  Analyzing CI/CD performance...")
+
+        ci_analysis = {
+            'workflow_count': 0,
+            'workflows': [],
+            'recent_runs': [],
+            'insights': []
+        }
+
+        try:
+            # Get GitHub Actions workflows
+            try:
+                workflows = repo.get_workflows()
+                ci_analysis['workflow_count'] = workflows.totalCount
+
+                for workflow in list(workflows)[:5]:  # Limit to 5 workflows
+                    workflow_data = {
+                        'name': workflow.name,
+                        'path': workflow.path,
+                        'state': workflow.state
+                    }
+
+                    # Get recent runs for this workflow
+                    try:
+                        runs = list(workflow.get_runs()[:10])  # Last 10 runs
+
+                        if runs:
+                            # Calculate average duration
+                            durations = []
+                            failures = 0
+
+                            for run in runs:
+                                if run.conclusion == 'failure':
+                                    failures += 1
+
+                                # Calculate duration if both times exist
+                                if run.created_at and run.updated_at:
+                                    duration = (run.updated_at - run.created_at).total_seconds()
+                                    durations.append(duration)
+
+                            if durations:
+                                avg_duration = sum(durations) / len(durations)
+                                workflow_data['avg_duration_seconds'] = int(avg_duration)
+                                workflow_data['avg_duration_minutes'] = round(avg_duration / 60, 1)
+
+                            workflow_data['failure_rate'] = failures / len(runs) if runs else 0
+                            workflow_data['recent_runs'] = len(runs)
+
+                    except GithubException:
+                        pass
+
+                    ci_analysis['workflows'].append(workflow_data)
+
+            except GithubException:
+                pass
+
+            # Generate insights
+            for workflow in ci_analysis['workflows']:
+                if workflow.get('avg_duration_minutes', 0) > 15:
+                    ci_analysis['insights'].append({
+                        'category': 'ci_performance',
+                        'issue': 'slow_ci_workflow',
+                        'severity': 'medium',
+                        'description': f'{workflow["name"]}: {workflow["avg_duration_minutes"]} minute average runtime',
+                        'suggestion': 'Consider caching, parallelization, or splitting workflows'
+                    })
+
+                if workflow.get('failure_rate', 0) > 0.2:
+                    ci_analysis['insights'].append({
+                        'category': 'ci_reliability',
+                        'issue': 'flaky_ci_workflow',
+                        'severity': 'high',
+                        'description': f'{workflow["name"]}: {workflow["failure_rate"]*100:.0f}% failure rate',
+                        'suggestion': 'High failure rate suggests flaky tests or environment issues'
+                    })
+
+            print(f"    Analyzed {len(ci_analysis['workflows'])} workflows, found {len(ci_analysis['insights'])} insights")
+
+        except Exception as e:
+            print(f"    Error analyzing CI/CD: {e}")
+
+        return ci_analysis
 
     def _save_repo_output(self, repo_name: str, data: Dict[str, Any]):
         """Save repo data to JSON file"""
