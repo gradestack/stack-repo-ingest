@@ -159,6 +159,27 @@ README.md, CONTRIBUTING.md, docs/
 
 See [PR_INTELLIGENCE.md](PR_INTELLIGENCE.md) for detailed examples and use cases.
 
+### 8. Shadow Infrastructure Discovery
+**NEW:** Discovers the **actual** workflows and tools developers use (not what's in docs):
+- **Makefile targets**: Real commands developers run (`make deploy-prod` = manual deploys)
+- **npm/Python scripts**: Hidden complexity and workarounds (`test:fast` = slow tests)
+- **Environment variables**: Configuration burden (23 vars = high onboarding friction)
+- **Workaround scripts**: Shell scripts that shouldn't exist (`fix-permissions.sh` = deployment issues)
+- **Docker Compose stack**: What local dev really requires (5 services = complex setup)
+
+**Synthesized insights**:
+```json
+{
+  "issue": "manual_deployment_detected",
+  "description": "Makefile contains deploy target with backup script",
+  "suggestion": "Implement automated deployments with proper rollback"
+}
+```
+
+**Why it matters**: Documentation says "just run npm test", but developers actually run `make test-fast` because tests take 45 minutes. Shadow infrastructure reveals this gap.
+
+See [SHADOW_INFRASTRUCTURE.md](SHADOW_INFRASTRUCTURE.md) for detailed examples and use cases.
+
 ## Installation
 
 ```bash

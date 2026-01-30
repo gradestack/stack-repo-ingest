@@ -100,6 +100,7 @@ class RepoIngester:
             'files': self._get_critical_files(repo),
             'structure': self._analyze_structure(repo),
             'pr_intelligence': self._mine_pr_comments(repo),
+            'shadow_infrastructure': self._discover_shadow_infrastructure(repo),
             'ingested_at': datetime.now(timezone.utc).isoformat()
         }
 
@@ -418,6 +419,355 @@ class RepoIngester:
             print(f"    Error mining PR comments: {e}")
 
         return intelligence
+
+    def _discover_shadow_infrastructure(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Discover the ACTUAL workflows and tooling developers use"""
+        print("  Discovering shadow infrastructure...")
+
+        shadow = {
+            'makefile_targets': self._parse_makefile(repo),
+            'npm_scripts': self._parse_package_json_scripts(repo),
+            'python_scripts': self._parse_pyproject_scripts(repo),
+            'env_complexity': self._analyze_env_vars(repo),
+            'workaround_scripts': self._find_workaround_scripts(repo),
+            'docker_compose_stack': self._parse_docker_compose(repo),
+            'insights': []
+        }
+
+        # Synthesize actionable insights
+        shadow['insights'] = self._synthesize_shadow_insights(shadow)
+
+        print(f"    Found {len(shadow['insights'])} shadow infrastructure insights")
+
+        return shadow
+
+    def _parse_makefile(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Parse Makefile to understand actual workflows"""
+        try:
+            makefile = repo.get_contents("Makefile")
+            content = makefile.decoded_content.decode('utf-8')
+
+            targets = []
+            current_target = None
+            commands = {}
+
+            for line in content.split('\n'):
+                # Target line (starts at column 0, ends with :)
+                if line and not line.startswith('\t') and ':' in line and not line.startswith('#'):
+                    target = line.split(':')[0].strip()
+                    if target and not target.startswith('.'):
+                        targets.append(target)
+                        current_target = target
+                        commands[target] = []
+                # Command line (starts with tab)
+                elif line.startswith('\t') and current_target:
+                    cmd = line.strip()
+                    if cmd and not cmd.startswith('@echo') and not cmd.startswith('#'):
+                        commands[current_target].append(cmd.lstrip('@'))
+
+            # Analyze patterns
+            has_deploy = any('deploy' in t for t in targets)
+            has_test = any('test' in t for t in targets)
+            has_docker = any('docker' in str(commands) for t in targets)
+
+            return {
+                'exists': True,
+                'targets': targets,
+                'commands': commands,
+                'has_deploy_target': has_deploy,
+                'has_test_target': has_test,
+                'uses_docker': has_docker,
+                'total_targets': len(targets)
+            }
+
+        except GithubException:
+            return {'exists': False}
+
+    def _parse_package_json_scripts(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Parse package.json scripts to understand Node.js workflows"""
+        try:
+            pkg = repo.get_contents("package.json")
+            content = json.loads(pkg.decoded_content.decode('utf-8'))
+
+            scripts = content.get('scripts', {})
+
+            # Detect patterns
+            has_fast_test = 'test:fast' in scripts or 'test:quick' in scripts
+            has_debug = any('debug' in s for s in scripts.keys())
+            has_docker = any('docker' in s for s in scripts.keys())
+            has_deploy = any('deploy' in s for s in scripts.keys())
+            has_postinstall = 'postinstall' in scripts
+
+            # Count test variants
+            test_scripts = [s for s in scripts.keys() if 'test' in s]
+
+            return {
+                'exists': True,
+                'scripts': scripts,
+                'has_fast_test': has_fast_test,
+                'has_debug_mode': has_debug,
+                'has_docker_scripts': has_docker,
+                'has_deploy_scripts': has_deploy,
+                'postinstall_hook': has_postinstall,
+                'test_script_count': len(test_scripts),
+                'total_scripts': len(scripts)
+            }
+
+        except (GithubException, json.JSONDecodeError):
+            return {'exists': False}
+
+    def _parse_pyproject_scripts(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Parse pyproject.toml for Python project scripts"""
+        try:
+            import re
+            pyproject = repo.get_contents("pyproject.toml")
+            content = pyproject.decoded_content.decode('utf-8')
+
+            # Look for [tool.uv.scripts] or [project.scripts]
+            scripts = {}
+            in_scripts_section = False
+
+            for line in content.split('\n'):
+                if '[tool.uv.scripts]' in line or '[project.scripts]' in line:
+                    in_scripts_section = True
+                    continue
+                elif line.startswith('[') and in_scripts_section:
+                    in_scripts_section = False
+                elif in_scripts_section and '=' in line:
+                    parts = line.split('=', 1)
+                    if len(parts) == 2:
+                        key = parts[0].strip()
+                        value = parts[1].strip().strip('"\'')
+                        scripts[key] = value
+
+            return {
+                'exists': True,
+                'scripts': scripts,
+                'total_scripts': len(scripts)
+            }
+
+        except GithubException:
+            return {'exists': False}
+
+    def _analyze_env_vars(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Analyze .env.example to understand configuration complexity"""
+        try:
+            env_file = repo.get_contents(".env.example")
+            content = env_file.decoded_content.decode('utf-8')
+
+            lines = content.split('\n')
+            vars = []
+            red_flags = []
+
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    var_name = line.split('=')[0].strip()
+                    vars.append(var_name)
+
+                    # Check for red flags
+                    if any(flag in var_name.lower() for flag in ['magic', 'dont_change', 'do_not', 'legacy', 'hack', 'temp']):
+                        red_flags.append(var_name)
+
+            # Categorize
+            categories = {
+                'database': len([v for v in vars if any(db in v.lower() for db in ['database', 'db_', 'postgres', 'mysql', 'mongo'])]),
+                'cache': len([v for v in vars if any(c in v.lower() for c in ['redis', 'cache', 'memcache'])]),
+                'cloud': len([v for v in vars if any(c in v.lower() for c in ['aws', 'gcp', 'azure', 's3', 'bucket'])]),
+                'auth': len([v for v in vars if any(a in v.lower() for a in ['auth', 'secret', 'key', 'token'])]),
+                'observability': len([v for v in vars if any(o in v.lower() for o in ['sentry', 'datadog', 'newrelic', 'log'])]),
+                'feature_flags': len([v for v in vars if any(f in v.lower() for f in ['enable', 'feature', 'flag'])]),
+            }
+
+            complexity = 'low' if len(vars) < 5 else 'medium' if len(vars) < 15 else 'high'
+
+            return {
+                'exists': True,
+                'total_vars': len(vars),
+                'variables': vars,
+                'categories': categories,
+                'red_flags': red_flags,
+                'complexity': complexity
+            }
+
+        except GithubException:
+            return {'exists': False}
+
+    def _find_workaround_scripts(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Find shell scripts that indicate workarounds"""
+        try:
+            workarounds = []
+            standard_paths = ['scripts/', 'bin/', '.git/', '.github/']
+
+            # Get all files in root
+            contents = repo.get_contents("")
+
+            for item in contents:
+                if item.type == "file" and item.name.endswith('.sh'):
+                    # Scripts in root are usually workarounds
+                    if not any(item.path.startswith(p) for p in standard_paths):
+                        workarounds.append({
+                            'name': item.name,
+                            'path': item.path,
+                            'location': 'root'
+                        })
+
+            # Check scripts/ directory for suspicious names
+            try:
+                scripts_dir = repo.get_contents("scripts")
+                if isinstance(scripts_dir, list):
+                    for item in scripts_dir:
+                        if item.name.endswith('.sh'):
+                            name_lower = item.name.lower()
+                            if any(keyword in name_lower for keyword in ['fix', 'manual', 'restart', 'workaround', 'temp', 'hack']):
+                                workarounds.append({
+                                    'name': item.name,
+                                    'path': item.path,
+                                    'location': 'scripts',
+                                    'suspicious_name': True
+                                })
+            except GithubException:
+                pass
+
+            return {
+                'found': len(workarounds) > 0,
+                'count': len(workarounds),
+                'scripts': workarounds
+            }
+
+        except GithubException:
+            return {'found': False, 'count': 0}
+
+    def _parse_docker_compose(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Parse docker-compose files to understand local dev requirements"""
+        try:
+            # Try multiple possible names
+            compose_files = [
+                'docker-compose.yml',
+                'docker-compose.yaml',
+                'docker-compose.local.yml',
+                'docker-compose.dev.yml'
+            ]
+
+            services = []
+            volumes = []
+
+            for filename in compose_files:
+                try:
+                    compose_file = repo.get_contents(filename)
+                    content = compose_file.decoded_content.decode('utf-8')
+
+                    # Basic YAML parsing (look for service names)
+                    in_services = False
+                    for line in content.split('\n'):
+                        if line.strip() == 'services:':
+                            in_services = True
+                            continue
+                        elif line.strip().startswith('volumes:') or line.strip().startswith('networks:'):
+                            in_services = False
+                        elif in_services and line and not line.startswith(' ' * 4) and ':' in line:
+                            service_name = line.split(':')[0].strip()
+                            if service_name and service_name not in services:
+                                services.append(service_name)
+
+                except GithubException:
+                    continue
+
+            # Analyze services
+            has_db = any(db in str(services).lower() for db in ['postgres', 'mysql', 'mongo', 'mariadb'])
+            has_cache = any(cache in str(services).lower() for cache in ['redis', 'memcache'])
+            has_queue = any(q in str(services).lower() for q in ['rabbitmq', 'kafka', 'celery'])
+
+            complexity = 'low' if len(services) <= 2 else 'medium' if len(services) <= 4 else 'high'
+
+            return {
+                'exists': len(services) > 0,
+                'services': services,
+                'service_count': len(services),
+                'has_database': has_db,
+                'has_cache': has_cache,
+                'has_queue': has_queue,
+                'complexity': complexity
+            }
+
+        except GithubException:
+            return {'exists': False}
+
+    def _synthesize_shadow_insights(self, shadow: Dict[str, Any]) -> List[Dict[str, str]]:
+        """Synthesize actionable insights from shadow infrastructure data"""
+        insights = []
+
+        # Insight 1: Manual deployment detected
+        if shadow['makefile_targets'].get('has_deploy_target'):
+            insights.append({
+                'category': 'deployment',
+                'issue': 'manual_deployment_detected',
+                'severity': 'medium',
+                'description': 'Makefile contains deploy target, suggesting manual deployments',
+                'suggestion': 'Consider automated deployments with proper rollback mechanisms'
+            })
+
+        # Insight 2: Test performance issues
+        if shadow['npm_scripts'].get('has_fast_test'):
+            insights.append({
+                'category': 'testing',
+                'issue': 'slow_tests',
+                'severity': 'medium',
+                'description': 'Fast test variant exists, indicating regular tests are too slow',
+                'suggestion': 'Optimize test suite or implement test parallelization in CI'
+            })
+
+        # Insight 3: Dependency patching (tech debt)
+        if shadow['npm_scripts'].get('postinstall_hook'):
+            insights.append({
+                'category': 'dependencies',
+                'issue': 'postinstall_patches',
+                'severity': 'high',
+                'description': 'postinstall hook detected, likely patching dependencies',
+                'suggestion': 'Investigate dependency issues and consider alternatives'
+            })
+
+        # Insight 4: High configuration complexity
+        if shadow['env_complexity'].get('complexity') == 'high':
+            insights.append({
+                'category': 'configuration',
+                'issue': 'high_config_complexity',
+                'severity': 'medium',
+                'description': f"{shadow['env_complexity'].get('total_vars', 0)} environment variables required",
+                'suggestion': 'Consider secrets manager or configuration service to reduce onboarding friction'
+            })
+
+        # Insight 5: Configuration red flags
+        if shadow['env_complexity'].get('red_flags'):
+            insights.append({
+                'category': 'configuration',
+                'issue': 'config_red_flags',
+                'severity': 'high',
+                'description': f"Suspicious env vars: {', '.join(shadow['env_complexity']['red_flags'])}",
+                'suggestion': 'Document these variables or refactor to remove magic values'
+            })
+
+        # Insight 6: Workaround scripts
+        if shadow['workaround_scripts'].get('count', 0) > 0:
+            insights.append({
+                'category': 'process',
+                'issue': 'workaround_scripts_found',
+                'severity': 'medium',
+                'description': f"{shadow['workaround_scripts']['count']} workaround scripts detected",
+                'suggestion': 'These scripts indicate manual processes that should be automated'
+            })
+
+        # Insight 7: Complex local dev setup
+        if shadow['docker_compose_stack'].get('service_count', 0) > 3:
+            insights.append({
+                'category': 'developer_experience',
+                'issue': 'complex_local_dev',
+                'severity': 'medium',
+                'description': f"{shadow['docker_compose_stack']['service_count']} services required for local development",
+                'suggestion': 'High onboarding friction - consider dev environment improvements or remote dev options'
+            })
+
+        return insights
 
     def _save_repo_output(self, repo_name: str, data: Dict[str, Any]):
         """Save repo data to JSON file"""
