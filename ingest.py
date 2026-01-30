@@ -7,7 +7,7 @@ import json
 import argparse
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from github import Github, Repository, GithubException
 from dotenv import load_dotenv
 
@@ -99,7 +99,8 @@ class RepoIngester:
             'metadata': self._get_repo_metadata(repo),
             'files': self._get_critical_files(repo),
             'structure': self._analyze_structure(repo),
-            'ingested_at': datetime.utcnow().isoformat()
+            'pr_intelligence': self._mine_pr_comments(repo),
+            'ingested_at': datetime.now(timezone.utc).isoformat()
         }
 
         return repo_data
@@ -276,6 +277,148 @@ class RepoIngester:
 
         return structure
 
+    def _mine_pr_comments(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Mine PR comments for confusion, tech debt, and fragility signals"""
+        print("  Mining PR comments...")
+
+        intelligence = {
+            'confusion_signals': [],
+            'tech_debt_acknowledgments': [],
+            'fragility_mentions': [],
+            'common_discussion_topics': [],
+            'total_prs_analyzed': 0,
+            'total_comments_analyzed': 0
+        }
+
+        try:
+            # Get closed PRs (merged ones have actual implementation discussion)
+            # Limit to recent 100 PRs to avoid rate limits
+            pulls = repo.get_pulls(state='closed', sort='updated', direction='desc')
+
+            analyzed_count = 0
+            for pr in pulls:
+                if analyzed_count >= 100:  # Limit to avoid rate limit issues
+                    break
+
+                analyzed_count += 1
+
+                try:
+                    # Get all comments (review comments + issue comments)
+                    comments = list(pr.get_issue_comments()) + list(pr.get_comments())
+                    intelligence['total_comments_analyzed'] += len(comments)
+
+                    for comment in comments:
+                        body = comment.body.lower() if comment.body else ""
+
+                        # Pattern 1: Confusion signals
+                        confusion_patterns = [
+                            'how does',
+                            'why does',
+                            'what is',
+                            'what does',
+                            'confused',
+                            'unclear',
+                            'not sure',
+                            "don't understand",
+                            'can you explain',
+                            'what\'s the difference'
+                        ]
+
+                        for pattern in confusion_patterns:
+                            if pattern in body:
+                                intelligence['confusion_signals'].append({
+                                    'pr': pr.number,
+                                    'pr_title': pr.title,
+                                    'pattern': pattern,
+                                    'snippet': body[:200]  # First 200 chars
+                                })
+                                break
+
+                        # Pattern 2: Tech debt acknowledgments
+                        debt_patterns = [
+                            'should probably',
+                            'we should',
+                            'todo',
+                            'fixme',
+                            'hack',
+                            'workaround',
+                            'technical debt',
+                            'tech debt',
+                            'will fix later',
+                            'temporary',
+                            'quick fix'
+                        ]
+
+                        for pattern in debt_patterns:
+                            if pattern in body:
+                                intelligence['tech_debt_acknowledgments'].append({
+                                    'pr': pr.number,
+                                    'pr_title': pr.title,
+                                    'pattern': pattern,
+                                    'snippet': body[:200]
+                                })
+                                break
+
+                        # Pattern 3: Fragility mentions
+                        fragility_patterns = [
+                            'breaks',
+                            'breaks when',
+                            'fails',
+                            'doesn\'t work',
+                            'broken',
+                            'regression',
+                            'flaky',
+                            'intermittent',
+                            'sometimes fails',
+                            'race condition'
+                        ]
+
+                        for pattern in fragility_patterns:
+                            if pattern in body:
+                                intelligence['fragility_mentions'].append({
+                                    'pr': pr.number,
+                                    'pr_title': pr.title,
+                                    'pattern': pattern,
+                                    'snippet': body[:200]
+                                })
+                                break
+
+                except GithubException as e:
+                    # Skip PRs that error (might be access issues)
+                    continue
+
+            intelligence['total_prs_analyzed'] = analyzed_count
+
+            # Aggregate common topics
+            all_signals = (
+                intelligence['confusion_signals'] +
+                intelligence['tech_debt_acknowledgments'] +
+                intelligence['fragility_mentions']
+            )
+
+            # Count pattern frequencies
+            pattern_counts = {}
+            for signal in all_signals:
+                pattern = signal['pattern']
+                pattern_counts[pattern] = pattern_counts.get(pattern, 0) + 1
+
+            # Sort by frequency
+            intelligence['common_discussion_topics'] = sorted(
+                [{'pattern': k, 'count': v} for k, v in pattern_counts.items()],
+                key=lambda x: x['count'],
+                reverse=True
+            )[:10]  # Top 10
+
+            print(f"    Analyzed {analyzed_count} PRs, {intelligence['total_comments_analyzed']} comments")
+            print(f"    Found {len(intelligence['confusion_signals'])} confusion signals")
+            print(f"    Found {len(intelligence['tech_debt_acknowledgments'])} tech debt mentions")
+            print(f"    Found {len(intelligence['fragility_mentions'])} fragility mentions")
+
+        except GithubException as e:
+            print(f"    Error mining PR comments: {e}")
+
+        return intelligence
+
     def _save_repo_output(self, repo_name: str, data: Dict[str, Any]):
         """Save repo data to JSON file"""
         filename = self.output_dir / f"{repo_name}.json"
@@ -303,7 +446,7 @@ def main():
     summary = {
         'org': args.org,
         'repos_ingested': len(results),
-        'timestamp': datetime.utcnow().isoformat(),
+        'timestamp': datetime.now(timezone.utc).isoformat(),
         'repos': [r['metadata']['name'] for r in results]
     }
 

@@ -149,6 +149,16 @@ AWS:        appspec.yml, buildspec.yml
 README.md, CONTRIBUTING.md, docs/
 ```
 
+### 7. PR Comment Intelligence
+**NEW:** Mines PR comments for signals that traditional metrics miss:
+- **Confusion signals**: Questions, uncertainty ("how does", "not sure")
+- **Tech debt acknowledgments**: Known shortcuts ("should probably", "TODO", "hack")
+- **Fragility mentions**: Known brittle areas ("breaks", "flaky", "race condition")
+
+**Why it matters**: If PR comments show confusion about Kubernetes, don't suggest K8s migrations - suggest documentation or simpler alternatives. If comments mention "workaround for DB perf", acknowledge that constraint in suggestions.
+
+See [PR_INTELLIGENCE.md](PR_INTELLIGENCE.md) for detailed examples and use cases.
+
 ## Installation
 
 ```bash
