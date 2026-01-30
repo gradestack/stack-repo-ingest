@@ -105,6 +105,7 @@ class RepoIngester:
             'code_fear_indicators': self._detect_code_fear(repo),
             'hidden_dependencies': self._discover_hidden_dependencies(repo),
             'ci_analysis': self._analyze_ci_performance(repo),
+            'bus_factor': self._map_bus_factor(repo),
             'ingested_at': datetime.now(timezone.utc).isoformat()
         }
 
@@ -1106,6 +1107,172 @@ class RepoIngester:
             print(f"    Error analyzing CI/CD: {e}")
 
         return ci_analysis
+
+    def _map_bus_factor(self, repo: Repository.Repository) -> Dict[str, Any]:
+        """Map knowledge distribution and identify single points of failure"""
+        print("  Mapping bus factor and knowledge distribution...")
+
+        bus_factor = {
+            'total_contributors': 0,
+            'active_contributors': 0,  # Last 90 days
+            'contributors': [],
+            'file_ownership': {},
+            'sole_ownership_files': [],
+            'critical_sole_ownership': [],
+            'knowledge_concentration': 'unknown',
+            'estimated_bus_factor': 0,
+            'insights': []
+        }
+
+        try:
+            # Get all contributors
+            contributors = list(repo.get_contributors())
+            bus_factor['total_contributors'] = len(contributors)
+
+            # Analyze contributor activity
+            contributor_stats = {}
+            for contributor in contributors[:50]:  # Limit to top 50
+                login = contributor.login if contributor.login else 'unknown'
+                contributor_stats[login] = {
+                    'commits': contributor.contributions,
+                    'login': login
+                }
+
+            bus_factor['contributors'] = [
+                {'login': k, 'commits': v['commits']}
+                for k, v in sorted(contributor_stats.items(),
+                                 key=lambda x: x[1]['commits'],
+                                 reverse=True)
+            ][:20]  # Top 20
+
+            # Analyze commit history to map file ownership
+            # Get recent commits to see who's actively working on what
+            commits = list(repo.get_commits()[:200])
+
+            file_authors = {}  # file -> {author: commit_count}
+
+            for commit in commits:
+                try:
+                    author = commit.commit.author.name if commit.commit.author else 'unknown'
+
+                    # Get files changed in this commit
+                    for file in commit.files:
+                        if file.filename not in file_authors:
+                            file_authors[file.filename] = {}
+
+                        file_authors[file.filename][author] = \
+                            file_authors[file.filename].get(author, 0) + 1
+
+                except (GithubException, AttributeError):
+                    continue
+
+            # Identify sole ownership (files with only one author)
+            for filename, authors in file_authors.items():
+                if len(authors) == 1:
+                    sole_author = list(authors.keys())[0]
+                    commit_count = authors[sole_author]
+
+                    bus_factor['sole_ownership_files'].append({
+                        'file': filename,
+                        'author': sole_author,
+                        'commits': commit_count
+                    })
+
+                    # Check if it's a critical file
+                    is_critical = any(
+                        pattern in filename.lower()
+                        for pattern in [
+                            'auth', 'payment', 'security', 'config',
+                            'main', 'index', 'server', 'app',
+                            'deploy', 'migration'
+                        ]
+                    )
+
+                    if is_critical:
+                        bus_factor['critical_sole_ownership'].append({
+                            'file': filename,
+                            'author': sole_author,
+                            'commits': commit_count,
+                            'reason': 'critical_pattern_match'
+                        })
+
+            # Calculate knowledge concentration
+            if bus_factor['total_contributors'] > 0:
+                top_contributor_commits = bus_factor['contributors'][0]['commits'] if bus_factor['contributors'] else 0
+                total_commits = sum(c['commits'] for c in bus_factor['contributors'])
+
+                if total_commits > 0:
+                    concentration_ratio = top_contributor_commits / total_commits
+
+                    if concentration_ratio > 0.7:
+                        bus_factor['knowledge_concentration'] = 'very_high'
+                    elif concentration_ratio > 0.5:
+                        bus_factor['knowledge_concentration'] = 'high'
+                    elif concentration_ratio > 0.3:
+                        bus_factor['knowledge_concentration'] = 'medium'
+                    else:
+                        bus_factor['knowledge_concentration'] = 'distributed'
+
+            # Estimate bus factor (how many people need to leave before trouble)
+            # Simple heuristic: number of people who collectively own 80% of commits
+            if bus_factor['contributors']:
+                total_commits = sum(c['commits'] for c in bus_factor['contributors'])
+                cumulative = 0
+                bus_factor_count = 0
+
+                for contrib in bus_factor['contributors']:
+                    cumulative += contrib['commits']
+                    bus_factor_count += 1
+                    if cumulative >= total_commits * 0.8:
+                        break
+
+                bus_factor['estimated_bus_factor'] = bus_factor_count
+
+            # Generate insights
+            if bus_factor['estimated_bus_factor'] <= 2:
+                bus_factor['insights'].append({
+                    'category': 'risk',
+                    'issue': 'low_bus_factor',
+                    'severity': 'critical',
+                    'description': f'Bus factor of {bus_factor["estimated_bus_factor"]} - project highly vulnerable',
+                    'suggestion': 'Implement knowledge sharing, pair programming, and documentation'
+                })
+
+            if len(bus_factor['critical_sole_ownership']) > 0:
+                bus_factor['insights'].append({
+                    'category': 'risk',
+                    'issue': 'critical_sole_ownership',
+                    'severity': 'high',
+                    'description': f'{len(bus_factor["critical_sole_ownership"])} critical files owned by single contributors',
+                    'suggestion': 'Spread knowledge of critical systems through pairing and documentation'
+                })
+
+            if bus_factor['knowledge_concentration'] in ['very_high', 'high']:
+                bus_factor['insights'].append({
+                    'category': 'risk',
+                    'issue': 'knowledge_concentration',
+                    'severity': 'high',
+                    'description': f'{bus_factor["knowledge_concentration"]} knowledge concentration detected',
+                    'suggestion': 'Top contributor owns too much knowledge - risk if they leave'
+                })
+
+            if len(bus_factor['sole_ownership_files']) > 20:
+                bus_factor['insights'].append({
+                    'category': 'risk',
+                    'issue': 'many_sole_ownership_files',
+                    'severity': 'medium',
+                    'description': f'{len(bus_factor["sole_ownership_files"])} files owned by single contributors',
+                    'suggestion': 'Consider code reviews and cross-training to distribute knowledge'
+                })
+
+            print(f"    Bus factor: {bus_factor['estimated_bus_factor']}, "
+                  f"concentration: {bus_factor['knowledge_concentration']}, "
+                  f"found {len(bus_factor['insights'])} risk insights")
+
+        except Exception as e:
+            print(f"    Error mapping bus factor: {e}")
+
+        return bus_factor
 
     def _save_repo_output(self, repo_name: str, data: Dict[str, Any]):
         """Save repo data to JSON file"""

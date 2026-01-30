@@ -233,9 +233,43 @@ See [SHADOW_INFRASTRUCTURE.md](SHADOW_INFRASTRUCTURE.md) for detailed examples a
 }
 ```
 
+### 13. Bus Factor Mapping
+**NEW:** Maps knowledge distribution and identifies single points of failure:
+- **Contributor distribution**: Who's contributing and how much?
+- **File ownership mapping**: Who owns which files? (from commit history)
+- **Critical file analysis**: Auth, payment, deploy systems with single owners
+- **Knowledge concentration**: How much knowledge is in top contributors?
+- **Estimated bus factor**: How many people before losing 80% of knowledge?
+
+**Real insight from gradestack/stacops - CRITICAL RISK**:
+```json
+{
+  "estimated_bus_factor": 2,  // Losing 2 people = project in danger
+  "knowledge_concentration": "very_high",  // 78% in one person
+  "critical_sole_ownership": 106,  // 106 critical files, one owner each
+  "total_sole_ownership": 256,     // 256 files never touched by >1 person
+  "insights": [
+    {
+      "severity": "critical",
+      "issue": "low_bus_factor",
+      "description": "Bus factor of 2 - project highly vulnerable"
+    },
+    {
+      "severity": "high",
+      "issue": "knowledge_concentration",
+      "description": "very_high knowledge concentration detected"
+    }
+  ]
+}
+```
+
+**What this means**: If wlonk leaves, you lose 78% of project knowledge. If wlonk AND one other person leave, project is crippled. 106 critical systems have single points of failure.
+
+See [BUS_FACTOR.md](BUS_FACTOR.md) for detailed analysis and recommendations.
+
 ## Complete Intelligence System
 
-This tool now extracts **12 layers of intelligence** from GitHub repos. See [INTELLIGENCE_SUMMARY.md](INTELLIGENCE_SUMMARY.md) for:
+This tool now extracts **13 layers of intelligence** from GitHub repos. See [INTELLIGENCE_SUMMARY.md](INTELLIGENCE_SUMMARY.md) for:
 - Complete feature breakdown
 - Real results from gradestack org
 - How each layer enables context-aware AI

@@ -28,6 +28,9 @@ System dependencies, runtime fetches, external API calls
 ### 8. ✅ CI/CD Performance Analysis (NEW)
 Workflow timing, failure rates, bottlenecks
 
+### 9. ✅ Bus Factor Mapping (NEW)
+Knowledge distribution, single points of failure, contributor analysis
+
 ## Real Results from gradestack Org
 
 ### stacops Repo
@@ -241,6 +244,27 @@ Result: ✅ Addresses psychological blocker, not just technical
 - `failure_rate`: >20% = flaky tests
 - Workflow count: Many workflows = complexity
 
+### Bus Factor Mapping
+**What it reveals:**
+- Knowledge distribution (who knows what?)
+- Single points of failure (critical files with one owner)
+- Contributor concentration (is knowledge in one person's head?)
+- Organizational risk (bus factor = how many people before trouble?)
+
+**Key metrics:**
+- `estimated_bus_factor`: ≤2 = critical risk, 3-5 = moderate, 5+ = healthy
+- `knowledge_concentration`: very_high/high = risky, medium/distributed = healthy
+- `critical_sole_ownership`: Critical files (auth, payment, deploy) with single owners
+- `sole_ownership_files`: Total files never touched by >1 person
+
+**Real data from gradestack/stacops**:
+- Bus factor: **2** (CRITICAL - losing 2 people = project crippled)
+- Knowledge concentration: **very_high** (78% in one person - wlonk)
+- Critical sole ownership: **106 files** (auth, config, CI/CD)
+- Total sole ownership: **256 files** (never cross-trained)
+
+This is your HIGHEST PRIORITY RISK. Before worrying about test flakiness or deploy speed, you need to spread knowledge. One person leaving could end the project.
+
 ## Output Structure
 
 ```json
@@ -281,6 +305,15 @@ Result: ✅ Addresses psychological blocker, not just technical
   "ci_analysis": {
     "workflow_count": 0,
     "workflows": [...],
+    "insights": [...]
+  },
+  "bus_factor": {
+    "total_contributors": 0,
+    "estimated_bus_factor": 0,
+    "knowledge_concentration": "unknown",
+    "contributors": [...],
+    "sole_ownership_files": [...],
+    "critical_sole_ownership": [...],
     "insights": [...]
   }
 }
